@@ -1,9 +1,0 @@
-{
-    "username": "",
-    "password": "",
-    "base_address": "https://studip.uos.de/plugins.php/restipplugin",
-    "local_path": "~/studip",
-    "interval": 1200,
-    "last_check": -1
-}
- 
