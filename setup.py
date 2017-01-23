@@ -5,7 +5,7 @@ home = expanduser("~")
 
 setup(
     name='StudDP',
-    version='1.1.92',
+    version='1.1.93',
     author='Maxim Schuwalow',
     author_email='mschuwalow@uos.de',
     packages=['studdp'],
@@ -18,7 +18,9 @@ setup(
         "pycparser >= 2.17",
         "requests >= 2.12.3",
         "SecretStorage >= 2.3.1",
-        "six >= 1.10.0"
+        "six >= 1.10.0",
+        "python-daemon",
+        "pidfile"
     ],
     url='https://github.com/MSchuwalow/StudDP.git',
     license='MIT',

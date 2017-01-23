@@ -6,22 +6,17 @@ StudDP downloads files from Stud.IP.
 
 import json
 import logging
-import os
-import shutil
-import signal
 import time
 import sys
-import requests
 import re
 import optparse
-from distutils.util import strtobool
+from pidfile import PidFile
 import keyring
 import getpass
-import atexit
+import daemon
+from . import *
 from .picker import Picker
 from .APIWrapper import APIWrapper
-from . import CONFIG
-from . import CONFIG_FILE
 
 LOG = logging.getLogger(__name__)
 LOG_PATH = os.path.expanduser(os.path.join('~', '.studdp'))
@@ -29,7 +24,7 @@ PID_FILE = os.path.expanduser(os.path.join('~', '.studdp', 'studdp.pid'))
 WIN_INVALID_CHARACTERS = [":", "<", ">", "|", "\?", "\*"]
 
 
-class StudDP(object):
+class StudDP:
     """
     The main program loops until interrupted.
     Every time files were changed after the last check, they are downloaded.
@@ -52,6 +47,13 @@ class StudDP(object):
         self.on_windows = on_windows
         self.update = update
 
+    def __del__(self):
+        LOG.info('Invoking exit.')
+        with open(CONFIG_FILE, 'w') as wfile:
+            LOG.info('Writing config.')
+            json.dump(self.config, wfile, sort_keys=True, indent=4 * ' ')
+        LOG.info('Exiting.')
+
     def _needs_download(self, document):
         """
         Checks if a download of the document is needed.
@@ -71,18 +73,6 @@ class StudDP(object):
                 courses = self.api.get_courses()
             except Exception:
                 LOG.exception("Getting courselist failed. Stacktrace:")
-
-            if not self.config['courses_selected']:
-                LOG.info("Updating course selection")
-                titles = map(lambda x: x["title"], courses)
-                selection = Picker(
-                    title="Select courses to download",
-                    options=titles,
-                    checked=self.config['selected_courses']).getSelected()
-                self.config["courses_selected"] = True
-                if not selection:
-                    return
-                self.config['selected_courses'] = selection
 
             LOG.info('Checking courses.')
             for course in courses:
@@ -148,10 +138,7 @@ def _setup_logging(log_to_stdout=False):
 
 
 def _get_password(username, force_update=False):
-    if username == "":
-        print("No username provided. "
-              "Please configure ~/.config/studdp/config.json first")
-        exit()
+
     LOG.info("Querying for password")
     password = keyring.get_password("StudDP", username)
     if not password or force_update:
@@ -160,19 +147,6 @@ def _get_password(username, force_update=False):
         LOG.info("Adding new password to keyring")
         keyring.set_password("StudDP", username, password)
     return password
-
-
-def _exit_func():
-    """
-    Ensures clean exit by writing the current configuration file and
-    deleting the pid file.
-    """
-    LOG.info('Invoking exit.')
-    with open(CONFIG_FILE, 'w') as wfile:
-        LOG.info('Writing config.')
-        json.dump(CONFIG, wfile, sort_keys=True, indent=4 * ' ')
-    os.unlink(PID_FILE)
-    LOG.info('Exiting.')
 
 
 def _parse_args():
@@ -198,28 +172,51 @@ def _parse_args():
     return parser.parse_args()
 
 
+def _load_config(config, options):
+    if config['username'] == "":
+        print("No username provided. "
+              "Please configure ~/.config/studdp/config.json first")
+        exit(1)
+
+    password = _get_password(config['username'], options.update_password)
+
+    api = APIWrapper((config['username'], password), config["base_address"], config["local_path"])
+
+    courses = api.get_courses()
+    if not config['courses_selected'] or options.regenerate:
+        LOG.info("Updating course selection")
+        titles = map(lambda x: x["title"], courses)
+        selection = Picker(
+            title="Select courses to download",
+            options=titles,
+            checked=config['selected_courses']).getSelected()
+        config["courses_selected"] = True
+        if selection:
+            config['selected_courses'] = selection
+
+    return api
+
+
 def main():
     (options, args) = _parse_args()
     _setup_logging(options.log_to_stdout)
 
-    username = CONFIG["username"]
-    password = _get_password(username, options.update_password)
+    if not os.path.exists(CONFIG_FILE):
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(DEFAULT_CONFIG, f, sort_keys=True, indent=4 * ' ')
+    with open(CONFIG_FILE, 'r') as rfile:
+        config = json.load(rfile)
 
-    os.makedirs(os.path.dirname(PID_FILE), exist_ok=True)
-    with open(PID_FILE, 'w') as pid_file:
-        pid_file.write(str(os.getpid()))
+    api = _load_config(config, options)
 
-    atexit.register(_exit_func)
+    task = StudDP(config, api, options.daemonize, options.on_windows, options.update_courses)
 
-    if options.regenerate:
-        CONFIG["courses_selected"] = False
-
-
-    api_helper = APIWrapper((username, password), CONFIG["base_address"],
-                            CONFIG["local_path"])
-
-    StudDP(CONFIG, api_helper, options.daemonize, options.on_windows,
-           options.update_courses)()
+    if options.daemonize:
+        with daemon.DaemonContext(pidfile=PidFile(PID_FILE)):
+            task()
+    else:
+        task()
 
 if __name__ == "__main__":
     main()
